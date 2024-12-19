@@ -1,6 +1,6 @@
 import os
 import cv2
-import argparse
+import copy
 import numpy as np
 from pathlib import Path
 
@@ -35,34 +35,30 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
                 print(f"이미지를 읽을 수 없습니다: {filename}")
                 continue
 
-            # 이미지 크기 조정 (너무 큰 이미지는 처리 속도가 느림)
+            # 이미지 크기 가져오기
             h, w = image.shape[:2]
-            max_size = 1024
-            if max(h, w) > max_size:
-                scale = max_size / max(h, w)
-                new_w, new_h = int(w * scale), int(h * scale)
-                image = cv2.resize(image, (new_w, new_h))
-                h, w = new_h, new_w
+            
+            # bbox 설정 (이미지 중앙 영역)
+            x0, y0 = w//4, h//4
+            bbox_w, bbox_h = w//2, h//2
+            bbox = [x0, y0, bbox_w, bbox_h]
 
             # 얼굴 특징점 추출
-            bbox = [w//4, h//4, w//2, h//2]  # 이미지 중앙 영역을 bbox로 사용
             features = processor.inference(image, [bbox])
             
             if features and len(features['landmarks']) > 0:
                 # 결과 시각화
-                canvas = image.copy()
-                
+                canvas = copy.deepcopy(image)
+                landmarks = np.array(features['landmarks'][0])
+                headpose = np.array(features['headpose'][0])
+
+                # Plot features
                 if 'landmarks' in show_attributes:
-                    landmarks = np.array(features['landmarks'][0])
-                    # 랜드마크 좌표를 이미지 크기에 맞게 스케일 조정
-                    landmarks[:, 0] *= w
-                    landmarks[:, 1] *= h
                     canvas = plotter.landmarks.draw_landmarks(canvas, landmarks)
                 
                 if 'headpose' in show_attributes:
-                    headpose = np.array(features['headpose'][0])
                     canvas = plotter.hpose.draw_headpose(canvas, 
-                                                       [0, 0, w, h],  # 전체 이미지 영역 사용
+                                                       [x0, y0, x0+bbox_w, y0+bbox_h],
                                                        headpose[:3], 
                                                        headpose[3:], 
                                                        euler=True)
