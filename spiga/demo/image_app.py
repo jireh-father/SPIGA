@@ -113,39 +113,44 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
     # 모든 이미지 파일 찾기
     image_files = get_all_image_files(input_folder)
     
+    # 실행할 모델 리스트 설정
+    models_to_run = ['spiga', 'mediapipe', 'dlib'] if model == 'all' else [model]
+    
     for image_path in image_files:
         # 상대 경로 유지를 위한 처리
         rel_path = os.path.relpath(image_path, input_folder)
         output_subdir = os.path.dirname(os.path.join(output_folder, rel_path))
         os.makedirs(output_subdir, exist_ok=True)
         
-        # 출력 파일명 생성
-        name, ext = os.path.splitext(os.path.basename(image_path))
-        if model == 'spiga':
-            output_path = os.path.join(output_subdir, f'spiga_{name}_{spiga_dataset}{ext}')
-        else:
-            output_path = os.path.join(output_subdir, f'{model}_{name}{ext}')
-
-        # 이미지 처리
+        # 이미지 읽기
         image = cv2.imread(image_path)
         if image is None:
             print(f"이미지를 읽을 수 없습니다: {image_path}")
             continue
 
-        # 모델별 처리
-        result = None
-        if model == 'spiga':
-            result = process_spiga(image, spiga_dataset, show_attributes)
-        elif model == 'mediapipe':
-            result = process_mediapipe(image)
-        elif model == 'dlib':
-            result = process_dlib(image)
+        # 각 모델별로 처리
+        for current_model in models_to_run:
+            # 출력 파일명 생성
+            name, ext = os.path.splitext(os.path.basename(image_path))
+            if current_model == 'spiga':
+                output_path = os.path.join(output_subdir, f'spiga_{name}_{spiga_dataset}{ext}')
+            else:
+                output_path = os.path.join(output_subdir, f'{current_model}_{name}{ext}')
 
-        if result is not None:
-            cv2.imwrite(output_path, result)
-            print(f"처리 완료: {rel_path}")
-        else:
-            print(f"얼굴을 찾을 수 없습니다: {rel_path}")
+            # 모델별 처리
+            result = None
+            if current_model == 'spiga':
+                result = process_spiga(image, spiga_dataset, show_attributes)
+            elif current_model == 'mediapipe':
+                result = process_mediapipe(image)
+            elif current_model == 'dlib':
+                result = process_dlib(image)
+
+            if result is not None:
+                cv2.imwrite(output_path, result)
+                print(f"처리 완료 ({current_model}): {rel_path}")
+            else:
+                print(f"얼굴을 찾을 수 없습니다 ({current_model}): {rel_path}")
 
 def main():
     parser = argparse.ArgumentParser(description='얼굴 랜드마크 일괄 처리 프로그램')
@@ -160,7 +165,7 @@ def main():
     parser.add_argument('-m', '--model',
                         type=str,
                         default='spiga',
-                        choices=['spiga', 'mediapipe', 'dlib'],
+                        choices=['spiga', 'mediapipe', 'dlib', 'all'],
                         help='사용할 랜드마크 추출 모델')
     parser.add_argument('-d', '--dataset', 
                         type=str, 
