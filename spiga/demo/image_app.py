@@ -37,11 +37,11 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
                 continue
 
             # 이미지 처리
-            face_data = processor.process_face(image)
-            if face_data is not None:
+            faces_data = processor.process_faces(image)
+            if faces_data and len(faces_data) > 0:
                 # 결과 시각화 및 저장
                 viewer.process_image(image, 
-                                   face_data=face_data,
+                                   faces_data=faces_data,
                                    show_attributes=show_attributes,
                                    save_path=output_path,
                                    show=False)
