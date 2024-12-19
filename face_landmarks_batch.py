@@ -3,6 +3,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from pathlib import Path
+import argparse
 
 def process_images(input_folder, output_folder):
     # MediaPipe Face Mesh 초기화
@@ -62,8 +63,17 @@ def process_images(input_folder, output_folder):
                     print(f"얼굴을 찾을 수 없습니다: {filename}")
 
 if __name__ == "__main__":
-    # 입력 폴더와 출력 폴더 지정
-    input_folder = "input_images"  # 입력 이미지가 있는 폴더
-    output_folder = "output_images"  # 결과를 저장할 폴더
+    # ArgumentParser 설정
+    parser = argparse.ArgumentParser(description='얼굴 랜드마크 일괄 처리 프로그램')
+    parser.add_argument('--input', '-i', 
+                        type=str, 
+                        required=True,
+                        help='입력 이미지가 있는 폴더 경로')
+    parser.add_argument('--output', '-o', 
+                        type=str, 
+                        required=True,
+                        help='결과 이미지를 저장할 폴더 경로')
     
-    process_images(input_folder, output_folder) 
+    args = parser.parse_args()
+    
+    process_images(args.input, args.output) 
