@@ -1,12 +1,13 @@
 import os
 import cv2
 import argparse
-import pkg_resources
+import numpy as np
 from pathlib import Path
 
 # SPIGA 관련 import
-import spiga.demo.analyze.extract.spiga_processor as pr_spiga
-from spiga.demo.visualize.viewer import Viewer
+from spiga.inference.config import ModelConfig
+from spiga.inference.framework import SPIGAFramework
+from spiga.demo.visualize.plotter import Plotter
 
 def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attributes=None):
     if show_attributes is None:
@@ -19,10 +20,8 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
     image_extensions = ['.jpg', '.jpeg', '.png', '.bmp']
 
     # SPIGA 초기화
-    processor = pr_spiga.SPIGAProcessor(dataset=spiga_dataset)
-
-    # Viewer 초기화 (이미지 저장용)
-    viewer = Viewer('image_app', width=None, height=None)
+    processor = SPIGAFramework(ModelConfig(spiga_dataset))
+    plotter = Plotter()
 
     # 입력 폴더의 모든 이미지 파일 처리
     for filename in os.listdir(input_folder):
@@ -36,15 +35,29 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
                 print(f"이미지를 읽을 수 없습니다: {filename}")
                 continue
 
-            # 이미지 처리
-            faces_data = processor.process_faces(image)
-            if faces_data and len(faces_data) > 0:
-                # 결과 시각화 및 저장
-                viewer.process_image(image, 
-                                   faces_data=faces_data,
-                                   show_attributes=show_attributes,
-                                   save_path=output_path,
-                                   show=False)
+            # 얼굴 검출 및 특징점 추출
+            h, w = image.shape[:2]
+            bbox = [0, 0, w, h]  # 전체 이미지를 bbox로 사용
+            features = processor.inference(image, [bbox])
+            
+            if features and len(features['landmarks']) > 0:
+                # 결과 시각화
+                canvas = image.copy()
+                
+                if 'landmarks' in show_attributes:
+                    landmarks = np.array(features['landmarks'][0])
+                    canvas = plotter.landmarks.draw_landmarks(canvas, landmarks)
+                
+                if 'headpose' in show_attributes:
+                    headpose = np.array(features['headpose'][0])
+                    canvas = plotter.hpose.draw_headpose(canvas, 
+                                                       [bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]], 
+                                                       headpose[:3], 
+                                                       headpose[3:], 
+                                                       euler=True)
+
+                # 결과 저장
+                cv2.imwrite(output_path, canvas)
                 print(f"처리 완료: {filename}")
             else:
                 print(f"얼굴을 찾을 수 없습니다: {filename}")
