@@ -8,7 +8,6 @@ from pathlib import Path
 from spiga.inference.config import ModelConfig
 from spiga.inference.framework import SPIGAFramework
 from spiga.demo.visualize.plotter import Plotter
-from spiga.demo.analyze.track.retinasort.face_tracker import RetinaFace
 
 def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attributes=None):
     if show_attributes is None:
@@ -20,10 +19,9 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
     # 지원하는 이미지 확장자
     image_extensions = ['.jpg', '.jpeg', '.png', '.bmp']
 
-    # SPIGA와 얼굴 검출기 초기화
+    # SPIGA 초기화
     processor = SPIGAFramework(ModelConfig(spiga_dataset))
     plotter = Plotter()
-    face_detector = RetinaFace()
 
     # 입력 폴더의 모든 이미지 파일 처리
     for filename in os.listdir(input_folder):
@@ -37,31 +35,37 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
                 print(f"이미지를 읽을 수 없습니다: {filename}")
                 continue
 
-            # 얼굴 검출
+            # 이미지 크기 조정 (너무 큰 이미지는 처리 속도가 느림)
             h, w = image.shape[:2]
-            face_detector.set_input_shape(h, w)
-            detections = face_detector.detect_faces(image)
+            max_size = 1024
+            if max(h, w) > max_size:
+                scale = max_size / max(h, w)
+                new_w, new_h = int(w * scale), int(h * scale)
+                image = cv2.resize(image, (new_w, new_h))
+                h, w = new_h, new_w
 
-            if detections:
+            # 얼굴 특징점 추출
+            bbox = [w//4, h//4, w//2, h//2]  # 이미지 중앙 영역을 bbox로 사용
+            features = processor.inference(image, [bbox])
+            
+            if features and len(features['landmarks']) > 0:
                 # 결과 시각화
                 canvas = image.copy()
                 
-                for det in detections:
-                    bbox = [det[0], det[1], det[2]-det[0], det[3]-det[1]]  # x,y,w,h 형식으로 변환
-                    features = processor.inference(image, [bbox])
-
-                    if features and len(features['landmarks']) > 0:
-                        if 'landmarks' in show_attributes:
-                            landmarks = np.array(features['landmarks'][0])
-                            canvas = plotter.landmarks.draw_landmarks(canvas, landmarks)
-                        
-                        if 'headpose' in show_attributes:
-                            headpose = np.array(features['headpose'][0])
-                            canvas = plotter.hpose.draw_headpose(canvas, 
-                                                               [bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]], 
-                                                               headpose[:3], 
-                                                               headpose[3:], 
-                                                               euler=True)
+                if 'landmarks' in show_attributes:
+                    landmarks = np.array(features['landmarks'][0])
+                    # 랜드마크 좌표를 이미지 크기에 맞게 스케일 조정
+                    landmarks[:, 0] *= w
+                    landmarks[:, 1] *= h
+                    canvas = plotter.landmarks.draw_landmarks(canvas, landmarks)
+                
+                if 'headpose' in show_attributes:
+                    headpose = np.array(features['headpose'][0])
+                    canvas = plotter.hpose.draw_headpose(canvas, 
+                                                       [0, 0, w, h],  # 전체 이미지 영역 사용
+                                                       headpose[:3], 
+                                                       headpose[3:], 
+                                                       euler=True)
 
                 # 결과 저장
                 cv2.imwrite(output_path, canvas)
