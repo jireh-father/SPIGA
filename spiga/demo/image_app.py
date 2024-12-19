@@ -8,6 +8,7 @@ from pathlib import Path
 from spiga.inference.config import ModelConfig
 from spiga.inference.framework import SPIGAFramework
 from spiga.demo.visualize.plotter import Plotter
+from spiga.demo.analyze.track.retinasort.face_tracker import RetinaFace
 
 def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attributes=None):
     if show_attributes is None:
@@ -19,9 +20,10 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
     # 지원하는 이미지 확장자
     image_extensions = ['.jpg', '.jpeg', '.png', '.bmp']
 
-    # SPIGA 초기화
+    # SPIGA와 얼굴 검출기 초기화
     processor = SPIGAFramework(ModelConfig(spiga_dataset))
     plotter = Plotter()
+    face_detector = RetinaFace()
 
     # 입력 폴더의 모든 이미지 파일 처리
     for filename in os.listdir(input_folder):
@@ -35,26 +37,31 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
                 print(f"이미지를 읽을 수 없습니다: {filename}")
                 continue
 
-            # 얼굴 검출 및 특징점 추출
+            # 얼굴 검출
             h, w = image.shape[:2]
-            bbox = [0, 0, w, h]  # 전체 이미지를 bbox로 사용
-            features = processor.inference(image, [bbox])
-            
-            if features and len(features['landmarks']) > 0:
+            face_detector.set_input_shape(h, w)
+            detections = face_detector.detect_faces(image)
+
+            if detections:
                 # 결과 시각화
                 canvas = image.copy()
                 
-                if 'landmarks' in show_attributes:
-                    landmarks = np.array(features['landmarks'][0])
-                    canvas = plotter.landmarks.draw_landmarks(canvas, landmarks)
-                
-                if 'headpose' in show_attributes:
-                    headpose = np.array(features['headpose'][0])
-                    canvas = plotter.hpose.draw_headpose(canvas, 
-                                                       [bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]], 
-                                                       headpose[:3], 
-                                                       headpose[3:], 
-                                                       euler=True)
+                for det in detections:
+                    bbox = [det[0], det[1], det[2]-det[0], det[3]-det[1]]  # x,y,w,h 형식으로 변환
+                    features = processor.inference(image, [bbox])
+
+                    if features and len(features['landmarks']) > 0:
+                        if 'landmarks' in show_attributes:
+                            landmarks = np.array(features['landmarks'][0])
+                            canvas = plotter.landmarks.draw_landmarks(canvas, landmarks)
+                        
+                        if 'headpose' in show_attributes:
+                            headpose = np.array(features['headpose'][0])
+                            canvas = plotter.hpose.draw_headpose(canvas, 
+                                                               [bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]], 
+                                                               headpose[:3], 
+                                                               headpose[3:], 
+                                                               euler=True)
 
                 # 결과 저장
                 cv2.imwrite(output_path, canvas)
