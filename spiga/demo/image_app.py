@@ -137,6 +137,11 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                     name, ext = os.path.splitext(os.path.basename(image_path))
                     output_path = os.path.join(output_subdir, f'spiga_{name}_{current_dataset}{ext}')
                     
+                    # 이미 처리된 파일이면 건너뛰기
+                    if os.path.exists(output_path):
+                        print(f"이미 처리됨 (spiga-{current_dataset}): {rel_path}")
+                        continue
+                    
                     result = process_spiga(image, current_dataset, show_attributes)
                     if result is not None:
                         cv2.imwrite(output_path, result)
@@ -147,6 +152,11 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                 # 다른 모델들 처리
                 name, ext = os.path.splitext(os.path.basename(image_path))
                 output_path = os.path.join(output_subdir, f'{current_model}_{name}{ext}')
+                
+                # 이미 처리된 파일이면 건너뛰기
+                if os.path.exists(output_path):
+                    print(f"이미 처리됨 ({current_model}): {rel_path}")
+                    continue
                 
                 result = None
                 if current_model == 'mediapipe':
