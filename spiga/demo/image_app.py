@@ -6,7 +6,6 @@ from pathlib import Path
 
 # SPIGA 관련 import
 import spiga.demo.analyze.extract.spiga_processor as pr_spiga
-from spiga.demo.analyze.analyzer import VideoAnalyzer
 from spiga.demo.visualize.viewer import Viewer
 
 def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attributes=None):
@@ -21,7 +20,6 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
 
     # SPIGA 초기화
     processor = pr_spiga.SPIGAProcessor(dataset=spiga_dataset)
-    faces_analyzer = VideoAnalyzer(None, processor=processor)  # tracker를 None으로 설정
 
     # Viewer 초기화 (이미지 저장용)
     viewer = Viewer('image_app', width=None, height=None)
@@ -39,16 +37,17 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
                 continue
 
             # 이미지 처리
-            faces_analyzer.process_frame(image)
-
-            # 결과 시각화 및 저장
-            viewer.process_image(image, 
-                               drawers=[faces_analyzer], 
-                               show_attributes=show_attributes,
-                               save_path=output_path,
-                               show=False)
-            
-            print(f"처리 완료: {filename}")
+            face_data = processor.process_face(image)
+            if face_data is not None:
+                # 결과 시각화 및 저장
+                viewer.process_image(image, 
+                                   face_data=face_data,
+                                   show_attributes=show_attributes,
+                                   save_path=output_path,
+                                   show=False)
+                print(f"처리 완료: {filename}")
+            else:
+                print(f"얼굴을 찾을 수 없습니다: {filename}")
 
 def main():
     parser = argparse.ArgumentParser(description='SPIGA 얼굴 특징점 일괄 처리 프로그램')
