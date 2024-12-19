@@ -135,7 +135,7 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                 # SPIGA 모델의 경우 각 데이터셋별로 처리
                 for current_dataset in datasets_to_run:
                     name, ext = os.path.splitext(os.path.basename(image_path))
-                    output_path = os.path.join(output_subdir, f'spiga_{name}_{current_dataset}{ext}')
+                    output_path = os.path.join(output_subdir, f'{name}_spiga_{current_dataset}{ext}')
                     
                     # 이미 처리된 파일이면 건너뛰기
                     if os.path.exists(output_path):
@@ -151,7 +151,7 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
             else:
                 # 다른 모델들 처리
                 name, ext = os.path.splitext(os.path.basename(image_path))
-                output_path = os.path.join(output_subdir, f'{current_model}_{name}{ext}')
+                output_path = os.path.join(output_subdir, f'{name}_{current_model}{ext}')
                 
                 # 이미 처리된 파일이면 건너뛰기
                 if os.path.exists(output_path):
