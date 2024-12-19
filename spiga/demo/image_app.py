@@ -29,7 +29,8 @@ def process_images(input_folder, output_folder, spiga_dataset='wflw', show_attri
     for filename in os.listdir(input_folder):
         if Path(filename).suffix.lower() in image_extensions:
             input_path = os.path.join(input_folder, filename)
-            output_path = os.path.join(output_folder, f'spiga_{filename}')
+            name, ext = os.path.splitext(filename)
+            output_path = os.path.join(output_folder, f'spiga_{name}_{spiga_dataset}{ext}')
 
             # 이미지 읽기
             image = cv2.imread(input_path)
