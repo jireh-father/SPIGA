@@ -12,6 +12,45 @@ from spiga.inference.config import ModelConfig
 from spiga.inference.framework import SPIGAFramework
 from spiga.demo.visualize.plotter import Plotter
 
+class ModelCache:
+    def __init__(self):
+        self.spiga_processors = {}  # dataset별 SPIGA 모델 캐시
+        self.mediapipe_model = None
+        self.dlib_detector = None
+        self.dlib_predictor = None
+        
+    def get_spiga(self, dataset):
+        if dataset not in self.spiga_processors:
+            self.spiga_processors[dataset] = SPIGAFramework(ModelConfig(dataset))
+        return self.spiga_processors[dataset]
+    
+    def get_mediapipe(self):
+        if self.mediapipe_model is None:
+            self.mediapipe_model = mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=True,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.5
+            )
+        return self.mediapipe_model
+    
+    def get_dlib(self):
+        if self.dlib_detector is None:
+            self.dlib_detector = dlib.get_frontal_face_detector()
+            self.dlib_predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+        return self.dlib_detector, self.dlib_predictor
+    
+    def clear_model(self, model_name):
+        if model_name == 'spiga':
+            self.spiga_processors.clear()
+        elif model_name == 'mediapipe':
+            if self.mediapipe_model:
+                self.mediapipe_model.close()
+            self.mediapipe_model = None
+        elif model_name == 'dlib':
+            self.dlib_detector = None
+            self.dlib_predictor = None
+
 def get_all_image_files(input_folder):
     """재귀적으로 모든 이미지 파일 찾기"""
     image_extensions = {'.jpg', '.jpeg', '.png', '.bmp'}
@@ -24,7 +63,7 @@ def get_all_image_files(input_folder):
     
     return image_files
 
-def process_spiga(image, spiga_dataset='wflw', show_attributes=None):
+def process_spiga(image, model_cache, spiga_dataset='wflw', show_attributes=None):
     """SPIGA 모델로 랜드마크 추출"""
     if show_attributes is None:
         show_attributes = ['landmarks', 'headpose']
@@ -34,7 +73,7 @@ def process_spiga(image, spiga_dataset='wflw', show_attributes=None):
     bbox_w, bbox_h = w//2, h//2
     bbox = [x0, y0, bbox_w, bbox_h]
     
-    processor = SPIGAFramework(ModelConfig(spiga_dataset))
+    processor = model_cache.get_spiga(spiga_dataset)
     plotter = Plotter()
     
     features = processor.inference(image, [bbox])
@@ -54,43 +93,36 @@ def process_spiga(image, spiga_dataset='wflw', show_attributes=None):
         return canvas
     return None
 
-def process_mediapipe(image):
+def process_mediapipe(image, model_cache):
     """MediaPipe로 랜드마크 추출"""
-    mp_face_mesh = mp.solutions.face_mesh
     mp_drawing = mp.solutions.drawing_utils
     mp_drawing_styles = mp.solutions.drawing_styles
+    
+    face_mesh = model_cache.get_mediapipe()
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(image_rgb)
 
-    with mp_face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5) as face_mesh:
-        
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = face_mesh.process(image_rgb)
-
-        if results.multi_face_landmarks:
-            canvas = copy.deepcopy(image)
-            for face_landmarks in results.multi_face_landmarks:
-                mp_drawing.draw_landmarks(
-                    image=canvas,
-                    landmark_list=face_landmarks,
-                    connections=mp_face_mesh.FACEMESH_TESSELATION,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style())
-                mp_drawing.draw_landmarks(
-                    image=canvas,
-                    landmark_list=face_landmarks,
-                    connections=mp_face_mesh.FACEMESH_CONTOURS,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_contours_style())
-            return canvas
+    if results.multi_face_landmarks:
+        canvas = copy.deepcopy(image)
+        for face_landmarks in results.multi_face_landmarks:
+            mp_drawing.draw_landmarks(
+                image=canvas,
+                landmark_list=face_landmarks,
+                connections=mp.solutions.face_mesh.FACEMESH_TESSELATION,
+                landmark_drawing_spec=None,
+                connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style())
+            mp_drawing.draw_landmarks(
+                image=canvas,
+                landmark_list=face_landmarks,
+                connections=mp.solutions.face_mesh.FACEMESH_CONTOURS,
+                landmark_drawing_spec=None,
+                connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_contours_style())
+        return canvas
     return None
 
-def process_dlib(image):
+def process_dlib(image, model_cache):
     """dlib으로 랜드마크 추출"""
-    detector = dlib.get_frontal_face_detector()
-    predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+    detector, predictor = model_cache.get_dlib()
     
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     faces = detector(gray)
@@ -130,67 +162,74 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
     models_to_run = ['spiga', 'mediapipe', 'dlib'] if model == 'all' else [model]
     datasets_to_run = ['wflw', '300wpublic', '300wprivate', 'merlrav'] if spiga_dataset == 'all' else [spiga_dataset]
     
-    for image_path in image_files:
-        # 상대 경로 유지를 위한 처리
-        rel_path = os.path.relpath(image_path, input_folder)
-        output_subdir = os.path.dirname(os.path.join(output_folder, rel_path))
-        os.makedirs(output_subdir, exist_ok=True)
+    # 모델 캐시 초기화
+    model_cache = ModelCache()
+    
+    # 모델별로 처리 (all 옵션일 때 메모리 효율을 위해)
+    for current_model in models_to_run:
+        print(f"\n=== {current_model.upper()} 모델 처리 시작 ===")
         
-        # 이미지 읽기
-        image = cv2.imread(image_path)
-        if image is None:
-            print(f"이미지를 읽을 수 없습니다: {image_path}")
-            continue
+        for image_path in image_files:
+            # 상대 경로 유지를 위한 처리
+            rel_path = os.path.relpath(image_path, input_folder)
+            output_subdir = os.path.dirname(os.path.join(output_folder, rel_path))
+            os.makedirs(output_subdir, exist_ok=True)
+            
+            # 이미지 읽기
+            image = cv2.imread(image_path)
+            if image is None:
+                print(f"이미지를 읽을 수 없습니다: {image_path}")
+                continue
 
-        # 원본 이미지 복사
-        orig_output_path = os.path.join(output_subdir, os.path.basename(image_path))
-        if not os.path.exists(orig_output_path):
-            cv2.imwrite(orig_output_path, image)
-            print(f"원본 이미지 저장: {rel_path}")
+            # 원본 이미지 복사 (첫 번째 모델에서만 수행)
+            if current_model == models_to_run[0]:
+                orig_output_path = os.path.join(output_subdir, os.path.basename(image_path))
+                if not os.path.exists(orig_output_path):
+                    cv2.imwrite(orig_output_path, image)
+                    print(f"원본 이미지 저장: {rel_path}")
 
-        # 이미지 리사이즈
-        resized_image = resize_image(image, max_size=512)
-        
-        # 각 모델별로 처리
-        for current_model in models_to_run:
+            # 이미지 리사이즈
+            resized_image = resize_image(image, max_size=512)
+            
             if current_model == 'spiga':
                 # SPIGA 모델의 경우 각 데이터셋별로 처리
                 for current_dataset in datasets_to_run:
                     name, ext = os.path.splitext(os.path.basename(image_path))
                     output_path = os.path.join(output_subdir, f'{name}_spiga_{current_dataset}{ext}')
                     
-                    # 이미 처리된 파일이면 건너뛰기
                     if os.path.exists(output_path):
                         print(f"이미 처리됨 (spiga-{current_dataset}): {rel_path}")
                         continue
                     
-                    result = process_spiga(resized_image, current_dataset, show_attributes)
+                    result = process_spiga(resized_image, model_cache, current_dataset, show_attributes)
                     if result is not None:
                         cv2.imwrite(output_path, result)
                         print(f"처리 완료 (spiga-{current_dataset}): {rel_path}")
                     else:
                         print(f"얼굴을 찾을 수 없습니다 (spiga-{current_dataset}): {rel_path}")
             else:
-                # 다른 모델들 처리
                 name, ext = os.path.splitext(os.path.basename(image_path))
                 output_path = os.path.join(output_subdir, f'{name}_{current_model}{ext}')
                 
-                # 이미 처리된 파일이면 건너뛰기
                 if os.path.exists(output_path):
                     print(f"이미 처리됨 ({current_model}): {rel_path}")
                     continue
                 
                 result = None
                 if current_model == 'mediapipe':
-                    result = process_mediapipe(resized_image)
+                    result = process_mediapipe(resized_image, model_cache)
                 elif current_model == 'dlib':
-                    result = process_dlib(resized_image)
+                    result = process_dlib(resized_image, model_cache)
 
                 if result is not None:
                     cv2.imwrite(output_path, result)
                     print(f"처리 완료 ({current_model}): {rel_path}")
                 else:
                     print(f"얼굴을 찾을 수 없습니다 ({current_model}): {rel_path}")
+        
+        # 현재 모델 처리가 끝나면 메모리에서 해제
+        model_cache.clear_model(current_model)
+        print(f"=== {current_model.upper()} 모델 처리 완료 ===\n")
 
 def main():
     parser = argparse.ArgumentParser(description='얼굴 랜드마크 일괄 처리 프로그램')
