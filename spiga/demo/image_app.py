@@ -106,6 +106,19 @@ def process_dlib(image):
         return canvas
     return None
 
+def resize_image(image, max_size=512):
+    """이미지 리사이즈 (긴 쪽을 max_size에 맞추고 비율 유지)"""
+    h, w = image.shape[:2]
+    if max(h, w) > max_size:
+        if h > w:
+            new_h = max_size
+            new_w = int(w * max_size / h)
+        else:
+            new_w = max_size
+            new_h = int(h * max_size / w)
+        return cv2.resize(image, (new_w, new_h))
+    return image
+
 def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wflw', show_attributes=None):
     # 출력 폴더가 없으면 생성
     os.makedirs(output_folder, exist_ok=True)
@@ -129,6 +142,15 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
             print(f"이미지를 읽을 수 없습니다: {image_path}")
             continue
 
+        # 원본 이미지 복사
+        orig_output_path = os.path.join(output_subdir, os.path.basename(image_path))
+        if not os.path.exists(orig_output_path):
+            cv2.imwrite(orig_output_path, image)
+            print(f"원본 이미지 저장: {rel_path}")
+
+        # 이미지 리사이즈
+        resized_image = resize_image(image, max_size=512)
+        
         # 각 모델별로 처리
         for current_model in models_to_run:
             if current_model == 'spiga':
@@ -142,7 +164,7 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                         print(f"이미 처리됨 (spiga-{current_dataset}): {rel_path}")
                         continue
                     
-                    result = process_spiga(image, current_dataset, show_attributes)
+                    result = process_spiga(resized_image, current_dataset, show_attributes)
                     if result is not None:
                         cv2.imwrite(output_path, result)
                         print(f"처리 완료 (spiga-{current_dataset}): {rel_path}")
@@ -160,9 +182,9 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                 
                 result = None
                 if current_model == 'mediapipe':
-                    result = process_mediapipe(image)
+                    result = process_mediapipe(resized_image)
                 elif current_model == 'dlib':
-                    result = process_dlib(image)
+                    result = process_dlib(resized_image)
 
                 if result is not None:
                     cv2.imwrite(output_path, result)
