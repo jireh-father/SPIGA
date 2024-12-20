@@ -16,8 +16,10 @@ class ModelCache:
     def __init__(self):
         self.spiga_processors = {}  # dataset별 SPIGA 모델 캐시
         self.mediapipe_model = None
+        self.mediapipe_detector = None  # face detection용 MediaPipe 모델
         self.dlib_detector = None
         self.dlib_predictor = None
+        self.face_detector = None
         
     def get_spiga(self, dataset):
         if dataset not in self.spiga_processors:
@@ -34,11 +36,24 @@ class ModelCache:
             )
         return self.mediapipe_model
     
+    def get_mediapipe_detector(self):
+        if self.mediapipe_detector is None:
+            self.mediapipe_detector = mp.solutions.face_detection.FaceDetection(
+                model_selection=1,  # 0=근거리, 1=원거리
+                min_detection_confidence=0.5
+            )
+        return self.mediapipe_detector
+    
     def get_dlib(self):
         if self.dlib_detector is None:
             self.dlib_detector = dlib.get_frontal_face_detector()
             self.dlib_predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
         return self.dlib_detector, self.dlib_predictor
+    
+    def get_face_detector(self):
+        if self.face_detector is None:
+            self.face_detector = dlib.get_frontal_face_detector()
+        return self.face_detector
     
     def clear_model(self, model_name):
         if model_name == 'spiga':
@@ -46,7 +61,10 @@ class ModelCache:
         elif model_name == 'mediapipe':
             if self.mediapipe_model:
                 self.mediapipe_model.close()
+            if self.mediapipe_detector:
+                self.mediapipe_detector.close()
             self.mediapipe_model = None
+            self.mediapipe_detector = None
         elif model_name == 'dlib':
             self.dlib_detector = None
             self.dlib_predictor = None
@@ -63,12 +81,73 @@ def get_all_image_files(input_folder):
     
     return image_files
 
-def process_spiga(image, model_cache, spiga_dataset='wflw', show_attributes=None):
+def pad_and_resize(image, target_size=512):
+    """이미지를 정사각형으로 패딩한 후 target_size로 리사이즈"""
+    h, w = image.shape[:2]
+    
+    # 정사각형 만들기 위한 패딩 계산
+    max_side = max(h, w)
+    pad_h = (max_side - h) // 2
+    pad_w = (max_side - w) // 2
+    
+    # 패딩 추가 (위, 아래, 좌, 우)
+    padded = cv2.copyMakeBorder(
+        image,
+        pad_h, pad_h + (max_side - h) % 2,  # 홀수인 경우 아래쪽에 1픽셀 더 추가
+        pad_w, pad_w + (max_side - w) % 2,  # 홀수인 경우 오른쪽에 1픽셀 더 추가
+        cv2.BORDER_CONSTANT,
+        value=(0, 0, 0)  # 검정색으로 패딩
+    )
+    
+    # target_size로 리사이즈
+    resized = cv2.resize(padded, (target_size, target_size))
+    return resized
+
+def detect_and_crop_face(image, model_cache, margin_ratio=0.3):
+    """MediaPipe로 얼굴 검출 후 크롭"""
+    detector = model_cache.get_mediapipe_detector()
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = detector.process(image_rgb)
+    
+    if results.detections:
+        # 첫 번째 얼굴만 사용
+        detection = results.detections[0]
+        bbox = detection.location_data.relative_bounding_box
+        
+        # 상대 좌표를 절대 좌표로 변환
+        ih, iw = image.shape[:2]
+        x = int(bbox.xmin * iw)
+        y = int(bbox.ymin * ih)
+        w = int(bbox.width * iw)
+        h = int(bbox.height * ih)
+        
+        # 여유 공간 추가 (margin_ratio * 100%)
+        margin_x = int(w * margin_ratio)
+        margin_y = int(h * margin_ratio)
+        
+        # 이미지 경계 확인
+        x1 = max(0, x - margin_x)
+        y1 = max(0, y - margin_y)
+        x2 = min(iw, x + w + margin_x)
+        y2 = min(ih, y + h + margin_y)
+        
+        face_crop = image[y1:y2, x1:x2]
+        # 크롭된 얼굴을 정사각형으로 패딩하고 512x512로 리사이즈
+        face_crop = pad_and_resize(face_crop, target_size=512)
+        return face_crop, (x1, y1, x2, y2)
+    return None, None
+
+def process_spiga(image, model_cache, spiga_dataset='wflw', show_attributes=None, margin_ratio=0.3):
     """SPIGA 모델로 랜드마크 추출"""
     if show_attributes is None:
         show_attributes = ['landmarks', 'headpose']
+    
+    # 얼굴 검출 및 크롭    
+    face_crop, crop_coords = detect_and_crop_face(image, model_cache, margin_ratio)
+    if face_crop is None:
+        return None
         
-    h, w = image.shape[:2]
+    h, w = face_crop.shape[:2]
     x0, y0 = w//4, h//4
     bbox_w, bbox_h = w//2, h//2
     bbox = [x0, y0, bbox_w, bbox_h]
@@ -76,9 +155,9 @@ def process_spiga(image, model_cache, spiga_dataset='wflw', show_attributes=None
     processor = model_cache.get_spiga(spiga_dataset)
     plotter = Plotter()
     
-    features = processor.inference(image, [bbox])
+    features = processor.inference(face_crop, [bbox])
     if features and len(features['landmarks']) > 0:
-        canvas = copy.deepcopy(image)
+        canvas = copy.deepcopy(face_crop)
         landmarks = np.array(features['landmarks'][0])
         headpose = np.array(features['headpose'][0])
 
@@ -93,17 +172,22 @@ def process_spiga(image, model_cache, spiga_dataset='wflw', show_attributes=None
         return canvas
     return None
 
-def process_mediapipe(image, model_cache):
+def process_mediapipe(image, model_cache, margin_ratio=0.3):
     """MediaPipe로 랜드마크 추출"""
+    # 얼굴 검출 및 크롭
+    face_crop, crop_coords = detect_and_crop_face(image, model_cache, margin_ratio)
+    if face_crop is None:
+        return None
+        
     mp_drawing = mp.solutions.drawing_utils
     mp_drawing_styles = mp.solutions.drawing_styles
     
     face_mesh = model_cache.get_mediapipe()
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image_rgb = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
     results = face_mesh.process(image_rgb)
 
     if results.multi_face_landmarks:
-        canvas = copy.deepcopy(image)
+        canvas = copy.deepcopy(face_crop)
         for face_landmarks in results.multi_face_landmarks:
             mp_drawing.draw_landmarks(
                 image=canvas,
@@ -120,15 +204,20 @@ def process_mediapipe(image, model_cache):
         return canvas
     return None
 
-def process_dlib(image, model_cache):
+def process_dlib(image, model_cache, margin_ratio=0.3):
     """dlib으로 랜드마크 추출"""
+    # 얼굴 검출 및 크롭
+    face_crop, crop_coords = detect_and_crop_face(image, model_cache, margin_ratio)
+    if face_crop is None:
+        return None
+        
     detector, predictor = model_cache.get_dlib()
     
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
     faces = detector(gray)
     
     if len(faces) > 0:
-        canvas = copy.deepcopy(image)
+        canvas = copy.deepcopy(face_crop)
         for face in faces:
             landmarks = predictor(gray, face)
             for n in range(68):
@@ -138,20 +227,7 @@ def process_dlib(image, model_cache):
         return canvas
     return None
 
-def resize_image(image, max_size=512):
-    """이미지 리사이즈 (긴 쪽을 max_size에 맞추고 비율 유지)"""
-    h, w = image.shape[:2]
-    if max(h, w) > max_size:
-        if h > w:
-            new_h = max_size
-            new_w = int(w * max_size / h)
-        else:
-            new_w = max_size
-            new_h = int(h * max_size / w)
-        return cv2.resize(image, (new_w, new_h))
-    return image
-
-def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wflw', show_attributes=None):
+def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wflw', show_attributes=None, margin_ratio=0.3):
     # 출력 폴더가 없으면 생성
     os.makedirs(output_folder, exist_ok=True)
     
@@ -181,16 +257,20 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                 print(f"이미지를 읽을 수 없습니다: {image_path}")
                 continue
 
-            # 원본 이미지 복사 (첫 번째 모델에서만 수행)
-            if current_model == models_to_run[0]:
-                orig_output_path = os.path.join(output_subdir, os.path.basename(image_path))
-                if not os.path.exists(orig_output_path):
-                    cv2.imwrite(orig_output_path, image)
-                    print(f"원본 이미지 저장: {rel_path}")
+            # 얼굴 검출 및 크롭
+            face_crop, crop_coords = detect_and_crop_face(image, model_cache, margin_ratio)
+            if face_crop is None:
+                print(f"얼굴을 찾을 수 없습니다: {rel_path}")
+                continue
 
-            # 이미지 리사이즈
-            resized_image = resize_image(image, max_size=512)
-            
+            # 원본 크롭 이미지 저장 (첫 번째 모델에서만 수행)
+            if current_model == models_to_run[0]:
+                name, ext = os.path.splitext(os.path.basename(image_path))
+                orig_output_path = os.path.join(output_subdir, f'{name}_crop{ext}')
+                if not os.path.exists(orig_output_path):
+                    cv2.imwrite(orig_output_path, face_crop)
+                    print(f"크롭된 원본 이미지 저장: {rel_path}")
+
             if current_model == 'spiga':
                 # SPIGA 모델의 경우 각 데이터셋별로 처리
                 for current_dataset in datasets_to_run:
@@ -201,7 +281,7 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                         print(f"이미 처리됨 (spiga-{current_dataset}): {rel_path}")
                         continue
                     
-                    result = process_spiga(resized_image, model_cache, current_dataset, show_attributes)
+                    result = process_spiga(image, model_cache, current_dataset, show_attributes, margin_ratio)
                     if result is not None:
                         cv2.imwrite(output_path, result)
                         print(f"처리 완료 (spiga-{current_dataset}): {rel_path}")
@@ -217,9 +297,9 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
                 
                 result = None
                 if current_model == 'mediapipe':
-                    result = process_mediapipe(resized_image, model_cache)
+                    result = process_mediapipe(image, model_cache, margin_ratio)
                 elif current_model == 'dlib':
-                    result = process_dlib(resized_image, model_cache)
+                    result = process_dlib(image, model_cache, margin_ratio)
 
                 if result is not None:
                     cv2.imwrite(output_path, result)
@@ -232,6 +312,9 @@ def process_images(input_folder, output_folder, model='spiga', spiga_dataset='wf
         print(f"=== {current_model.upper()} 모델 처리 완료 ===\n")
 
 def main():
+    # shape predictor 모델 다운로드
+    download_shape_predictor()
+    
     parser = argparse.ArgumentParser(description='얼굴 랜드마크 일괄 처리 프로그램')
     parser.add_argument('-i', '--input', 
                         type=str, 
@@ -257,6 +340,10 @@ def main():
                         default=['landmarks', 'headpose'],
                         choices=['bbox', 'landmarks', 'headpose'],
                         help='SPIGA 모델의 표시할 얼굴 특징 선택')
+    parser.add_argument('-mr', '--margin-ratio',
+                        type=float,
+                        default=0.3,
+                        help='얼굴 크롭 시 추가할 여유 공간 비율 (기본값: 0.3 = 30%%)')
 
     args = parser.parse_args()
     
@@ -264,7 +351,42 @@ def main():
                   args.output,
                   model=args.model,
                   spiga_dataset=args.dataset,
-                  show_attributes=args.show)
+                  show_attributes=args.show,
+                  margin_ratio=args.margin_ratio)
+
+def download_shape_predictor():
+    """shape_predictor_68_face_landmarks.dat 파일 다운로드"""
+    import bz2
+    import urllib.request
+    import os
+    
+    dat_file = "shape_predictor_68_face_landmarks.dat"
+    bz2_file = dat_file + ".bz2"
+    
+    # 이미 파일이 존재하는지 확인
+    if os.path.exists(dat_file):
+        print(f"{dat_file} 파일이 이미 존재합니다.")
+        return
+        
+    print("shape predictor 모델 다운로드 중...")
+    url = f"http://dlib.net/files/{bz2_file}"
+    
+    try:
+        # bz2 파일 다운로드
+        urllib.request.urlretrieve(url, bz2_file)
+        
+        # bz2 압축 해제
+        with bz2.BZ2File(bz2_file) as fr, open(dat_file, 'wb') as fw:
+            fw.write(fr.read())
+            
+        # bz2 파일 삭제
+        os.remove(bz2_file)
+        print("다운로드 완료!")
+        
+    except Exception as e:
+        print(f"다운로드 실패: {str(e)}")
+        if os.path.exists(bz2_file):
+            os.remove(bz2_file)
 
 if __name__ == "__main__":
     main() 
